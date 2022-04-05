@@ -2,7 +2,7 @@
 Apache BookKeeper client writes in async rust
 
 ## Disclaimer
-**This project is far from production usage.**
+**This project is far from production usage.** It is almost unusable due to `!Sync` api which make generated future `!Send` if used across `await`.
 
 ## Examples
 See [tests](tests/client.rs).
