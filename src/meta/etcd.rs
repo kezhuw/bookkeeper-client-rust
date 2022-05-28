@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use compact_str::CompactStr;
+use compact_str::CompactString;
 use either::Either;
 use etcd_client::{
     Client,
@@ -118,7 +118,7 @@ impl types::LedgerMetadataStream for LedgerMetadataStream {
 }
 
 pub struct EtcdConfiguration {
-    scope: CompactStr,
+    scope: CompactString,
     #[allow(dead_code)]
     user: Option<(String, String)>,
     #[allow(dead_code)]
@@ -126,7 +126,7 @@ pub struct EtcdConfiguration {
 }
 
 impl EtcdConfiguration {
-    pub fn new(scope: CompactStr) -> EtcdConfiguration {
+    pub fn new(scope: CompactString) -> EtcdConfiguration {
         EtcdConfiguration { scope, user: None, keep_alive: None }
     }
 
@@ -142,7 +142,7 @@ impl EtcdConfiguration {
 }
 
 pub struct EtcdMetaStore {
-    scope: CompactStr,
+    scope: CompactString,
     client: KvClient,
     watcher: WatchClient,
     bucket_counter: AtomicU64,

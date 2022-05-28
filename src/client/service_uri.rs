@@ -1,14 +1,14 @@
 use std::str::FromStr;
 
-use compact_str::CompactStr;
+use compact_str::CompactString;
 
 use super::errors::{BkError, ErrorKind};
 
 pub struct ServiceUri {
-    pub scheme: CompactStr,
-    pub spec: CompactStr,
-    pub address: CompactStr,
-    pub path: CompactStr,
+    pub scheme: CompactString,
+    pub spec: CompactString,
+    pub address: CompactString,
+    pub path: CompactString,
 }
 
 impl FromStr for ServiceUri {
