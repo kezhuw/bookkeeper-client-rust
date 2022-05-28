@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use compact_str::CompactStr;
+use compact_str::CompactString;
 use either::Either;
 use guard::guard;
 use ignore_result::Ignore;
@@ -35,8 +35,8 @@ use crate::client::{BookieId, LedgerId, LedgerMetadata};
 #[derive(Clone)]
 pub struct ZkConfiguration {
     ledger_id_format: Option<LedgerIdFormat>,
-    root: CompactStr,
-    connect: CompactStr,
+    root: CompactString,
+    connect: CompactString,
     timeout: Duration,
 }
 
@@ -489,7 +489,7 @@ impl LedgerIdFormat {
 struct ZkMetaClient {
     client: Arc<ZkClient>,
     scratch: String,
-    ledger_root: CompactStr,
+    ledger_root: CompactString,
     ledger_id_format: LedgerIdFormat,
     ledger_hob: i32,
     ledger_path: String,

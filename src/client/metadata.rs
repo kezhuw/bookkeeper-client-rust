@@ -341,7 +341,7 @@ pub(crate) trait HasLedgerMetadata {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct BookieId(compact_str::CompactStr);
+pub struct BookieId(compact_str::CompactString);
 
 impl BookieId {
     pub fn new(s: &str) -> BookieId {

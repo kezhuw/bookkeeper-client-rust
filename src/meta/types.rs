@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use compact_str::CompactStr;
+use compact_str::CompactString;
 use either::Either;
 use prost::Message;
 
@@ -104,10 +104,10 @@ impl BookieServiceInfo {
 
 #[derive(Clone)]
 pub struct BookieEndpoint {
-    pub id: CompactStr,
-    pub host: CompactStr,
+    pub id: CompactString,
+    pub host: CompactString,
     pub port: u16,
-    pub protocol: CompactStr,
+    pub protocol: CompactString,
 }
 
 impl From<bookie_service_info_format::Endpoint> for BookieEndpoint {
