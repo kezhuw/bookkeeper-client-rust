@@ -435,9 +435,8 @@ impl Bookkeeper {
     ///
     /// # Notable errors
     /// * [ErrorKind::LedgerNotExisted] if no such ledger.
-    pub async fn delete_ledger(&self, ledger_id: LedgerId, options: DeleteOptions) -> Result<()> {
+    pub async fn delete_ledger(&self, ledger_id: LedgerId, _options: DeleteOptions) -> Result<()> {
         self.meta_store.remove_ledger_metadata(ledger_id, None).await?;
-        drop(options);
         Ok(())
     }
 }

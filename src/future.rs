@@ -117,7 +117,7 @@ pub struct SelectAll<'a, F> {
 impl<'a, F: FusedFuture> SelectAll<'a, F> {
     pub async fn next(&mut self) -> (usize, F::Output) {
         let next = SelectNext { futures: self.futures.as_mut() };
-        return next.await;
+        next.await
     }
 
     pub fn new(futures: &'a mut [F]) -> SelectAll<'a, F> {

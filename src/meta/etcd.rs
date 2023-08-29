@@ -185,22 +185,22 @@ impl EtcdMetaStore {
     }
 
     fn bucket_path(&self, bucket: u64) -> String {
-        return format!("{}/buckets/{:03}", self.scope, bucket);
+        format!("{}/buckets/{:03}", self.scope, bucket)
     }
 
     fn ledger_path(&self, ledger_id: LedgerId) -> String {
         let least64: i64 = ledger_id.into();
         let combined_id = least64 as u64 as u128;
         let uuid = Uuid::from_u128(combined_id);
-        return format!("{}/ledgers/{}", self.scope, uuid);
+        format!("{}/ledgers/{}", self.scope, uuid)
     }
 
     fn writable_bookie_directory_path(&self) -> String {
-        return format!("{}/bookies/writable/", self.scope);
+        format!("{}/bookies/writable/", self.scope)
     }
 
     fn readable_bookie_directory_path(&self) -> String {
-        return format!("{}/bookies/readable/", self.scope);
+        format!("{}/bookies/readable/", self.scope)
     }
 
     async fn watch_bookies_update(
@@ -390,7 +390,8 @@ impl LedgerMetadataStoreClient for EtcdMetaStore {
         let response = client.txn(txn).await?;
         if response.succeeded() {
             let Some(TxnOpResponse::Put(put_response)) = response.op_responses().into_iter().next() else {
-                let err = BkError::with_description(ErrorKind::MetaUnexpectedResponse, &"put succeed with no put response");
+                let err =
+                    BkError::with_description(ErrorKind::MetaUnexpectedResponse, &"put succeed with no put response");
                 return Err(err);
             };
             let Some(revision) = put_response.header().map(|h| h.revision()) else {
@@ -411,7 +412,7 @@ impl LedgerMetadataStoreClient for EtcdMetaStore {
             return Err(err);
         };
         let conflicting_metadata = serde::deserialize_ledger_metadata(metadata.ledger_id, kv.value())?;
-        return Ok(either::Left(Versioned::new(conflicting_revision, conflicting_metadata)));
+        Ok(either::Left(Versioned::new(conflicting_revision, conflicting_metadata)))
     }
 }
 

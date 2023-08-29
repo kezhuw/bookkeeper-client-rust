@@ -209,7 +209,7 @@ impl ZkLedgerMetadataStream {
     async fn connected(&mut self) -> Result<(), BkError> {
         match self.client.connected().await {
             Ok(_) => Ok(()),
-            Err(Error::SessionExpired) => return self.new_client().await,
+            Err(Error::SessionExpired) => self.new_client().await,
         }
     }
 
@@ -285,7 +285,7 @@ impl ZkBookieUpdateStream {
     async fn connected(&mut self) -> Result<(), BkError> {
         match self.client.connected().await {
             Ok(_) => Ok(()),
-            Err(_) => return self.new_client().await,
+            Err(_) => self.new_client().await,
         }
     }
 
@@ -454,7 +454,10 @@ impl LedgerIdFormat {
         let mut manager_splits = manager_line.split(':');
         let manager_class = manager_splits.next().unwrap();
         let Some(manager_version) = manager_splits.next() else {
-            return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"no ledger manager version in ledger layout"));
+            return Err(BkError::with_description(
+                ErrorKind::MetaInvalidData,
+                &"no ledger manager version in ledger layout",
+            ));
         };
         if manager_version.parse::<i32>().is_err() {
             return Err(BkError::with_description(
@@ -746,7 +749,7 @@ impl ZkMetaClient {
 
     async fn read_ledger_metadata(&mut self, ledger_id: LedgerId) -> Result<Versioned<LedgerMetadata>, BkError> {
         self.format_ledger_path(ledger_id);
-        return self.read_metadata(ledger_id, &self.ledger_path).await;
+        self.read_metadata(ledger_id, &self.ledger_path).await
     }
 
     async fn remove_ledger_metadata(
@@ -766,7 +769,7 @@ impl ZkMetaClient {
         if stat.mzxid != xid {
             return Err(BkError::new(ErrorKind::MetaVersionMismatch));
         }
-        return self.delete_ledger_path(&self.ledger_path, Some(stat.version)).await;
+        self.delete_ledger_path(&self.ledger_path, Some(stat.version)).await
     }
 
     async fn watch_ledger_metadata(

@@ -350,7 +350,7 @@ impl LedgerReader {
         if last_entry > last_add_confirmed {
             return Err(BkError::new(ErrorKind::ReadExceedLastAddConfirmed));
         }
-        return self.read_internally(first_entry, last_entry, options).await;
+        self.read_internally(first_entry, last_entry, options).await
     }
 
     /// Polls entry with given id.
@@ -523,7 +523,7 @@ impl LedgerReader {
         assert!(first_entry <= last_entry);
         assert!(first_entry >= EntryId::MIN);
         self.sync_metadata().await;
-        return self.read_internally(first_entry, last_entry, options).await;
+        self.read_internally(first_entry, last_entry, options).await
     }
 
     async fn recover_open_metadata(

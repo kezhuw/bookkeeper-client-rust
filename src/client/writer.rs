@@ -991,10 +991,7 @@ impl LedgerWriter {
         }
         let mut select_all = SelectAll::new(&mut futures);
         for _ in 0..bookies.len() {
-            let (_, r) = select_all.next().await;
-            if let Err(e) = r {
-                return Err(e);
-            }
+            select_all.next().await.1?;
         }
         Ok(last_add_entry_id)
     }
@@ -1062,8 +1059,7 @@ impl LedgerAppender {
     }
 
     /// Closes ledger.
-    pub async fn close(&mut self, options: CloseOptions) -> Result<()> {
-        drop(options);
+    pub async fn close(&mut self, _options: CloseOptions) -> Result<()> {
         let (sender, receiver) = oneshot::channel();
         let request = WriteRequest::Close { responser: sender };
         if self.request_sender.send(request).await.is_err() {

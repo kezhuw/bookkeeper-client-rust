@@ -358,6 +358,7 @@ impl EntryBody {
         }
         let mut metadata = &body[..LAC_METADATA_LENGTH];
         digester.update(metadata);
+        #[allow(invalid_value)]
         #[allow(clippy::uninit_assumed_init)]
         let mut buf: [u8; MAX_DIGEST_LENGTH] = unsafe { MaybeUninit::uninit().assume_init() };
         digester.digest(&mut &mut buf[..digest_len]);
@@ -389,6 +390,7 @@ impl EntryBody {
         let mut metadata = &body[..ENTRY_METADATA_LENGTH];
         digester.update(metadata);
         digester.update(&body[prefix_len..]);
+        #[allow(invalid_value)]
         #[allow(clippy::uninit_assumed_init)]
         let mut buf: [u8; MAX_DIGEST_LENGTH] = unsafe { MaybeUninit::uninit().assume_init() };
         digester.digest(&mut &mut buf[..digest_len]);
@@ -606,7 +608,7 @@ impl Drop for State {
         if err.is_null() {
             return;
         }
-        unsafe { Box::from_raw(err) };
+        let _ = unsafe { Box::from_raw(err) };
     }
 }
 
@@ -722,7 +724,7 @@ impl PoolledClient {
 
     fn get_client(&self, bookie_id: &BookieId) -> Option<Arc<Client>> {
         let clients = self.clients.read().unwrap();
-        return clients.get(bookie_id.as_str()).cloned();
+        clients.get(bookie_id.as_str()).cloned()
     }
 
     async fn create_or_get_client(&self, bookie_id: &BookieId) -> Result<Arc<Client>> {
@@ -731,7 +733,7 @@ impl PoolledClient {
         }
         let (sender, receiver) = oneshot::channel();
         self.requester.send(ClientRequest::Create { bookie_id: bookie_id.to_owned(), responser: sender }).unwrap();
-        return receiver.await.unwrap();
+        receiver.await.unwrap()
     }
 
     #[allow(dead_code)]
@@ -751,7 +753,7 @@ impl PoolledClient {
         options: &ReadOptions<'_>,
     ) -> Result<(EntryId, FetchedEntry)> {
         let client = self.create_or_get_client(bookie_id).await?;
-        return client.read_last_entry(ledger_id, options).await;
+        client.read_last_entry(ledger_id, options).await
     }
 
     pub async fn read_entry(
@@ -762,7 +764,7 @@ impl PoolledClient {
         options: &ReadOptions<'_>,
     ) -> Result<FetchedEntry> {
         let client = self.create_or_get_client(bookie_id).await?;
-        return client.read_entry(ledger_id, entry_id, options).await;
+        client.read_entry(ledger_id, entry_id, options).await
     }
 
     pub async fn poll_entry(
@@ -773,7 +775,7 @@ impl PoolledClient {
         options: &PollOptions<'_>,
     ) -> Result<PolledEntry> {
         let client = self.create_or_get_client(bookie_id).await?;
-        return client.poll_entry(ledger_id, entry_id, options).await;
+        client.poll_entry(ledger_id, entry_id, options).await
     }
 
     pub async fn write_lac(
@@ -784,7 +786,7 @@ impl PoolledClient {
         options: &WriteLacOptions<'_>,
     ) -> Result<()> {
         let client = self.create_or_get_client(bookie_id).await?;
-        return client.write_lac(ledger_id, explicit_lac, options).await;
+        client.write_lac(ledger_id, explicit_lac, options).await
     }
 
     pub async fn read_lac(
@@ -794,12 +796,12 @@ impl PoolledClient {
         digest_algorithm: &DigestAlgorithm,
     ) -> Result<EntryId> {
         let client = self.create_or_get_client(bookie_id).await?;
-        return client.read_lac(ledger_id, digest_algorithm).await;
+        client.read_lac(ledger_id, digest_algorithm).await
     }
 
     pub async fn force_ledger(&self, bookie_id: &BookieId, ledger_id: LedgerId) -> Result<()> {
         let client = self.create_or_get_client(bookie_id).await?;
-        return client.force_ledger(ledger_id).await;
+        client.force_ledger(ledger_id).await
     }
 
     pub async fn add_entry(
@@ -809,7 +811,7 @@ impl PoolledClient {
         options: &AddOptions<'_>,
     ) -> Result<()> {
         let client = self.create_or_get_client(bookie_id).await?;
-        return client.add_entry(entry, options).await;
+        client.add_entry(entry, options).await
     }
 }
 
@@ -908,7 +910,7 @@ impl Client {
         ledger_id: LedgerId,
         options: &ReadOptions<'_>,
     ) -> Result<(EntryId, FetchedEntry)> {
-        return self.fetch_entry_internal(ledger_id, LAST_ADD_CONFIRMED, options).await;
+        self.fetch_entry_internal(ledger_id, LAST_ADD_CONFIRMED, options).await
     }
 
     pub async fn poll_entry(

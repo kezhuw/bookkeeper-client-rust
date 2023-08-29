@@ -144,7 +144,7 @@ impl QuorumCoverageSet {
                 if acc == Some(false) || item == Some(false) {
                     return Some(false);
                 }
-                if acc == None || item == None {
+                if acc.is_none() || item.is_none() {
                     return None;
                 }
                 Some(true)
