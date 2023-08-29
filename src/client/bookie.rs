@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use bytes::buf::{Buf, BufMut};
 use futures::future::FutureExt;
-use guard::guard;
 use ignore_result::Ignore;
 use prost::Message;
 use tokio::net::{TcpStream, ToSocketAddrs};
@@ -117,10 +116,10 @@ trait Operation {
             let err = response_status_to_error(response.status);
             return Err(err);
         }
-        guard!(let Some(inner_response) = Self::extract_response(&mut response) else {
+        let Some(inner_response) = Self::extract_response(&mut response) else {
             let err = BkError::with_description(ErrorKind::BookieUnexpectedResponse, &"no response");
             return Err(err);
-        });
+        };
         let status = Self::extract_status(&inner_response);
         if status != StatusCode::Eok as i32 {
             let err = response_status_to_error(response.status);
@@ -879,9 +878,9 @@ impl Client {
         };
         let response = self.request(read).await?;
         let max_lac = response.max_lac.unwrap_or(INVALID_ENTRY_ID);
-        guard!(let Some(body) = response.body else {
+        let Some(body) = response.body else {
             return Err(BkError::with_description(ErrorKind::BookieUnexpectedResponse, &"no entry body in response"));
-        });
+        };
         let body = EntryBody(body);
         let digester = options.digest_algorithm.digester();
         let EntryContent { entry_id: actual_entry_id, payload, last_add_confirmed, ledger_length } =
@@ -928,17 +927,17 @@ impl Client {
             ..Default::default()
         };
         let response = self.request(read).await?;
-        guard!(let Some(max_lac) = response.max_lac else {
+        let Some(max_lac) = response.max_lac else {
             let err = BkError::with_description(ErrorKind::BookieUnexpectedResponse, &"no last add confirmed");
             return Err(err);
-        });
+        };
         if response.entry_id == LAST_ADD_CONFIRMED.into() {
             return Ok(PolledEntry { last_add_confirmed: EntryId(max_lac), payload: None });
         }
-        guard!(let Some(body) = response.body else {
+        let Some(body) = response.body else {
             let err = BkError::with_description(ErrorKind::BookieUnexpectedResponse, &"no entry body in response");
             return Err(err);
-        });
+        };
         let body = EntryBody(body);
         let digester = options.digest_algorithm.digester();
         let EntryContent { payload, last_add_confirmed, .. } = body.extract_entry(ledger_id, entry_id, digester)?;

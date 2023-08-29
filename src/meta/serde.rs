@@ -1,6 +1,5 @@
 use bytes::BufMut;
 use const_format::formatcp;
-use guard::guard;
 use prost::Message;
 
 use super::types::BookieServiceInfo;
@@ -59,25 +58,25 @@ pub fn serialize_ledger_metadata(metadata: &LedgerMetadata) -> Result<Vec<u8>, B
 pub fn deserialize_ledger_metadata(ledger_id: LedgerId, bytes: &[u8]) -> Result<LedgerMetadata, BkError> {
     let mut splits = bytes.splitn(2, |u| *u == METADATA_VERSION_TERMINATOR);
     let version_line = splits.next().unwrap();
-    guard!(let Some(metadata_bytes) = splits.next() else {
+    let Some(metadata_bytes) = splits.next() else {
         return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"no ledger metadata"));
-    });
+    };
     if !version_line.starts_with(METADATA_VERSION_PREFIX.as_bytes()) {
         return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"invalid ledger metadata"));
     }
-    guard!(let Ok(version_str) = std::str::from_utf8(&version_line[METADATA_VERSION_PREFIX.len()..]) else {
+    let Ok(version_str) = std::str::from_utf8(&version_line[METADATA_VERSION_PREFIX.len()..]) else {
         return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"invalid ledger metadata format version"));
-    });
-    guard!(let Ok(version) = version_str.parse::<i32>() else {
+    };
+    let Ok(version) = version_str.parse::<i32>() else {
         return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"invalid ledger metadata format version"));
-    });
+    };
 
     if version != 3 {
         return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"unsupported metadata version"));
     }
-    guard!(let Ok(metadata_pb) = LedgerMetadataFormat::decode_length_delimited(metadata_bytes) else {
+    let Ok(metadata_pb) = LedgerMetadataFormat::decode_length_delimited(metadata_bytes) else {
         return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"invalid serialized ledger metadata"));
-    });
+    };
     let metadata: LedgerMetadata = LedgerMetadata { ledger_id, format_version: version, ..metadata_pb.try_into()? };
     Ok(metadata)
 }

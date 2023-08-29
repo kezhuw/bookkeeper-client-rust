@@ -8,7 +8,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use compact_str::CompactString;
 use either::Either;
-use guard::guard;
 use ignore_result::Ignore;
 use log::debug;
 use uuid::Uuid;
@@ -438,25 +437,25 @@ enum LedgerIdFormat {
 
 impl LedgerIdFormat {
     fn try_from_ledger_layout(data: Vec<u8>) -> Result<LedgerIdFormat, BkError> {
-        guard!(let Ok(s) = String::from_utf8(data) else {
+        let Ok(s) = String::from_utf8(data) else {
             return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"ledger layout is not utf8"));
-        });
+        };
         let mut lines = s.split('\n');
-        guard!(let Ok(format_version) = lines.next().unwrap().parse::<i32>() else {
+        let Ok(format_version) = lines.next().unwrap().parse::<i32>() else {
             return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"invalid ledger layout format version"));
-        });
+        };
         if format_version != 1 && format_version != 2 {
             let msg = format!("unsupported ledger layout format version {}", format_version);
             return Err(BkError::with_message(ErrorKind::MetaInvalidData, msg));
         }
-        guard!(let Some(manager_line) = lines.next() else {
+        let Some(manager_line) = lines.next() else {
             return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"no ledger manager in ledger layout"));
-        });
+        };
         let mut manager_splits = manager_line.split(':');
         let manager_class = manager_splits.next().unwrap();
-        guard!(let Some(manager_version) = manager_splits.next() else {
+        let Some(manager_version) = manager_splits.next() else {
             return Err(BkError::with_description(ErrorKind::MetaInvalidData, &"no ledger manager version in ledger layout"));
-        });
+        };
         if manager_version.parse::<i32>().is_err() {
             return Err(BkError::with_description(
                 ErrorKind::MetaInvalidData,

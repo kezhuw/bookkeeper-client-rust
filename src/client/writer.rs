@@ -7,7 +7,6 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures::future::{Fuse, FusedFuture, FutureExt};
-use guard::guard;
 use ignore_result::Ignore;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 use tokio::select;
@@ -411,9 +410,9 @@ where
         payload: Vec<u8>,
         responser: oneshot::Sender<Result<AddedEntry>>,
     ) {
-        guard!(let Some(responser) = self.check_append(responser) else {
+        let Some(responser) = self.check_append(responser) else {
             return;
-        });
+        };
         let entry_id = self.last_adding_entry_id + 1;
         if expected_entry_id.is_valid() && expected_entry_id != entry_id {
             let msg = format!("expect next entry id {}, got {}", entry_id, expected_entry_id);
@@ -758,10 +757,10 @@ impl LedgerWriter {
         while !(channel_closed && state.closed()) {
             select! {
                 request = request_receiver.recv(), if !channel_closed => {
-                    guard!(let Some(request) = request else {
+                    let Some(request) = request else {
                         channel_closed = true;
                         continue;
-                    });
+                    };
                     match request {
                         WriteRequest::Append{entry_id, payload, responser} => {
                             state.append_entry(entry_id, payload, responser);

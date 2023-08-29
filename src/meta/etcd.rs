@@ -22,7 +22,6 @@ use etcd_client::{
     WatchStream,
     Watcher,
 };
-use guard::guard;
 use ignore_result::Ignore;
 use uuid::Uuid;
 
@@ -225,10 +224,10 @@ impl EtcdMetaStore {
         let options = GetOptions::new().with_range(bookie_path_end).with_serializable();
         let mut client = self.client.clone();
         let response = client.get(bookie_path.clone(), Some(options)).await?;
-        guard!(let Some(header) = response.header() else {
+        let Some(header) = response.header() else {
             let err = BkError::with_description(ErrorKind::MetaUnexpectedResponse, &"no header");
             return Err(err);
-        });
+        };
         let start_revision = header.revision();
         let mut err: Option<BkError> = None;
         let bookies: Vec<BookieServiceInfo> = response
@@ -308,14 +307,14 @@ impl LedgerMetadataStoreClient for EtcdMetaStore {
         if response.succeeded() {
             return Err(BkError::new(ErrorKind::LedgerExisted));
         }
-        guard!(let Some(TxnOpResponse::Put(put_response)) = response.op_responses().into_iter().next() else {
+        let Some(TxnOpResponse::Put(put_response)) = response.op_responses().into_iter().next() else {
             let err = BkError::with_description(ErrorKind::MetaUnexpectedResponse, &"put succeed with no put response");
             return Err(err);
-        });
-        guard!(let Some(revision) = put_response.header().map(|h| h.revision()) else {
+        };
+        let Some(revision) = put_response.header().map(|h| h.revision()) else {
             let err = BkError::with_description(ErrorKind::MetaUnexpectedResponse, &"no header in put response");
             return Err(err);
-        });
+        };
         return Ok(MetaVersion::from(revision));
     }
 
@@ -326,13 +325,13 @@ impl LedgerMetadataStoreClient for EtcdMetaStore {
     ) -> Result<(), BkError> {
         let ledger_path = self.ledger_path(ledger_id);
         let mut client = self.client.clone();
-        guard!(let Some(version) = expected_version else {
+        let Some(version) = expected_version else {
             let response = client.delete(ledger_path, None).await?;
             if response.deleted() <= 0 {
                 return Err(BkError::new(ErrorKind::LedgerNotExisted));
             }
             return Ok(());
-        });
+        };
         let compare = Compare::mod_revision(ledger_path.clone(), CompareOp::Equal, version.into());
         let delete = TxnOp::delete(ledger_path.clone(), None);
         let get_op = TxnOp::get(ledger_path, Some(GetOptions::new().with_count_only()));
@@ -341,10 +340,10 @@ impl LedgerMetadataStoreClient for EtcdMetaStore {
         if response.succeeded() {
             return Ok(());
         }
-        guard!(let Some(TxnOpResponse::Get(get_response)) = response.op_responses().into_iter().next() else {
+        let Some(TxnOpResponse::Get(get_response)) = response.op_responses().into_iter().next() else {
             let err = BkError::with_description(ErrorKind::MetaUnexpectedResponse, &"get succeed with no get response");
             return Err(err);
-        });
+        };
         if get_response.count() != 0 {
             return Err(BkError::new(ErrorKind::MetaVersionMismatch));
         }
@@ -355,9 +354,9 @@ impl LedgerMetadataStoreClient for EtcdMetaStore {
         let ledger_path = self.ledger_path(ledger_id);
         let mut client = self.client.clone();
         let response = client.get(ledger_path, None).await?;
-        guard!(let Some(kv) = response.kvs().first() else {
+        let Some(kv) = response.kvs().first() else {
             return Err(BkError::new(ErrorKind::LedgerNotExisted));
-        });
+        };
         let metadata = serde::deserialize_ledger_metadata(ledger_id, kv.value())?;
         let version = MetaVersion::from(kv.mod_revision());
         return Ok(Versioned::new(version, metadata));
@@ -390,27 +389,27 @@ impl LedgerMetadataStoreClient for EtcdMetaStore {
         let mut client = self.client.clone();
         let response = client.txn(txn).await?;
         if response.succeeded() {
-            guard!(let Some(TxnOpResponse::Put(put_response)) = response.op_responses().into_iter().next() else {
+            let Some(TxnOpResponse::Put(put_response)) = response.op_responses().into_iter().next() else {
                 let err = BkError::with_description(ErrorKind::MetaUnexpectedResponse, &"put succeed with no put response");
                 return Err(err);
-            });
-            guard!(let Some(revision) = put_response.header().map(|h| h.revision()) else {
+            };
+            let Some(revision) = put_response.header().map(|h| h.revision()) else {
                 let err = BkError::with_description(ErrorKind::MetaUnexpectedResponse, &"no header in put response");
                 return Err(err);
-            });
+            };
             return Ok(either::Right(MetaVersion::from(revision)));
         }
-        guard!(let Some(TxnOpResponse::Get(get_response)) = response.op_responses().into_iter().next() else {
+        let Some(TxnOpResponse::Get(get_response)) = response.op_responses().into_iter().next() else {
             let err = BkError::with_description(ErrorKind::MetaUnexpectedResponse, &"get succeed with no get response");
             return Err(err);
-        });
-        guard!(let Some(kv) = get_response.kvs().first() else {
+        };
+        let Some(kv) = get_response.kvs().first() else {
             return Err(BkError::new(ErrorKind::LedgerNotExisted));
-        });
-        guard!(let Some(conflicting_revision) = get_response.header().map(|h| h.revision()) else {
+        };
+        let Some(conflicting_revision) = get_response.header().map(|h| h.revision()) else {
             let err = BkError::with_description(ErrorKind::MetaUnexpectedResponse, &"no header in get response");
             return Err(err);
-        });
+        };
         let conflicting_metadata = serde::deserialize_ledger_metadata(metadata.ledger_id, kv.value())?;
         return Ok(either::Left(Versioned::new(conflicting_revision, conflicting_metadata)));
     }

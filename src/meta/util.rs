@@ -3,7 +3,6 @@ use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::{Arc, Mutex};
 
-use guard::guard;
 use ignore_result::Ignore;
 use tokio::sync::oneshot;
 use tokio::{select, task};
@@ -117,9 +116,9 @@ impl BookieRegistry {
                         break;
                     },
                     update = writable_updates.next() => {
-                        guard!(let Ok(result) = update else {
+                        let Ok(result) = update else {
                             continue;
-                        });
+                        };
                         let mut state = Self::extract_state(&snapshot).as_ref().clone();
                         state.version += 1;
                         Self::update_bookie(&mut state.writable_bookies, result);
@@ -128,9 +127,9 @@ impl BookieRegistry {
                         snapshot.state = state;
                     },
                     update = readable_updates.next() => {
-                        guard!(let Ok(result) = update else {
+                        let Ok(result) = update else {
                             continue;
-                        });
+                        };
                         let mut state = Self::extract_state(&snapshot).as_ref().clone();
                         state.version += 1;
                         Self::update_bookie(&mut state.readable_bookies, result);
