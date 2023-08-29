@@ -147,12 +147,6 @@ impl From<zk::Error> for BkError {
     }
 }
 
-impl From<zk::ConnectError> for BkError {
-    fn from(err: zk::ConnectError) -> BkError {
-        BkError::new(ErrorKind::MetaClientError).cause_by(err)
-    }
-}
-
 struct ZkSessionClient {
     client: Arc<ZkClient>,
     counter: usize,
@@ -175,13 +169,14 @@ impl ZkClientManager {
         if !Arc::ptr_eq(client, &guard.client) {
             return Ok(guard.client.clone());
         }
-        let zookeeper = zk::Client::connect(&self.config.connect, self.config.timeout).await?;
+        let zookeeper =
+            zk::Client::builder().with_session_timeout(self.config.timeout).connect(&self.config.connect).await?;
         let client = Arc::new(ZkClient { client: zookeeper });
         guard.session.truncate(36);
         guard.counter += 1;
         let counter = guard.counter;
         write!(&mut guard.session, "-{}", counter).ignore();
-        let options = zk::CreateOptions::new(zk::CreateMode::Ephemeral, zk::Acl::creator_all());
+        let options = zk::CreateMode::Ephemeral.with_acls(zk::Acls::creator_all());
         // A quorum write is necessary to ensure cross-client linearizable.
         client.create(&guard.session, Default::default(), &options).await?;
         guard.client = client.clone();
@@ -578,7 +573,7 @@ impl ZkMetaClient {
     }
 
     async fn generate_flat_ledger_id(&mut self) -> Result<LedgerId, BkError> {
-        let options = zk::CreateOptions::new(zk::CreateMode::EphemeralSequential, zk::Acl::anyone_all());
+        let options = zk::CreateMode::EphemeralSequential.with_acls(zk::Acls::anyone_all());
         let (_, sequence) = self.client.create("/ID-", Default::default(), &options).await?;
         if sequence.0 < 0 {
             return Err(BkError::new(ErrorKind::LedgerIdOverflow));
@@ -692,7 +687,7 @@ impl ZkMetaClient {
 
     #[async_recursion::async_recursion]
     async fn create_directory_optimistic(&self, path: &str) -> Result<(), zk::Error> {
-        let options = zk::CreateOptions::new(zk::CreateMode::Persistent, zk::Acl::anyone_all());
+        let options = zk::CreateMode::Persistent.with_acls(zk::Acls::anyone_all());
         loop {
             let result = self.client.create(path, Default::default(), &options).await;
             match result {
@@ -716,7 +711,7 @@ impl ZkMetaClient {
         data: &[u8],
         mode: zk::CreateMode,
     ) -> Result<(zk::Stat, zk::CreateSequence), zk::Error> {
-        let options = zk::CreateOptions::new(mode, zk::Acl::anyone_all());
+        let options = mode.with_acls(zk::Acls::anyone_all());
         loop {
             let result = self.client.create(path, data, &options).await;
             match result {
@@ -874,7 +869,12 @@ pub struct ZkMetaStore {
 impl ZkMetaStore {
     pub async fn new(mut config: ZkConfiguration) -> Result<ZkMetaStore, BkError> {
         let configed_ledger_id_format = config.ledger_id_format.take();
-        let zookeeper = zk::Client::connect(&config.connect, config.timeout).await?.chroot(&config.root).unwrap();
+        let zookeeper = zk::Client::builder()
+            .with_session_timeout(config.timeout)
+            .connect(&config.connect)
+            .await?
+            .chroot(&config.root)
+            .unwrap();
         let client = Arc::new(ZkClient { client: zookeeper });
         let manager = Arc::new(ZkClientManager::new(config, client.clone()));
         let layout_data = match client.get_data("/LAYOUT").await {
