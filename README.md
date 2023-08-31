@@ -1,4 +1,9 @@
 # Apache BookKeeper client
+[![crates.io](https://img.shields.io/crates/v/bookkeeper-client)](https://crates.io/crates/bookkeeper-client)
+[![docs.rs](https://img.shields.io/docsrs/bookkeeper-client)](https://docs.rs/bookkeeper-client)
+[![github-ci](https://github.com/kezhuw/bookkeeper-client-rust/actions/workflows/ci.yml/badge.svg?event=push)](https://github.com/kezhuw/bookkeeper-client-rust/actions)
+[![mit-license](https://img.shields.io/github/license/kezhuw/bookkeeper-client-rust)](LICENSE)
+
 Apache BookKeeper client writes in async rust
 
 ## Disclaimer
