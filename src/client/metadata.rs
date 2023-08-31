@@ -1,9 +1,18 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
+use std::marker::PhantomData;
+use std::sync::Arc;
 use std::time::SystemTime;
 
+use arc_swap::{ArcSwap, Guard};
+use atomic::Atomic;
+use static_assertions::assert_not_impl_any;
+
 use super::errors::{BkError, ErrorKind};
+use crate::meta::{MetaVersion, Versioned};
+
+type Result<T, E = BkError> = std::result::Result<T, E>;
 
 /// Ledger id.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -12,7 +21,7 @@ pub struct LedgerId(pub(crate) i64);
 impl TryFrom<i64> for LedgerId {
     type Error = BkError;
 
-    fn try_from(i: i64) -> Result<LedgerId, BkError> {
+    fn try_from(i: i64) -> Result<LedgerId> {
         if i < 0 {
             return Err(BkError::new(ErrorKind::InvalidLedgerId));
         }
@@ -128,6 +137,8 @@ impl std::ops::AddAssign<usize> for LedgerLength {
 
 /// Ledger entry id.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+#[derive(bytemuck::NoUninit)]
 pub struct EntryId(pub(crate) i64);
 
 impl Display for EntryId {
@@ -207,7 +218,7 @@ impl EntryId {
 impl TryFrom<i64> for EntryId {
     type Error = BkError;
 
-    fn try_from(i: i64) -> Result<EntryId, BkError> {
+    fn try_from(i: i64) -> Result<EntryId> {
         if i < 0 {
             return Err(BkError::new(ErrorKind::InvalidEntryId));
         }
@@ -218,6 +229,41 @@ impl TryFrom<i64> for EntryId {
 impl From<EntryId> for i64 {
     fn from(entry_id: EntryId) -> i64 {
         entry_id.0
+    }
+}
+
+pub(crate) struct AtomicEntryId {
+    entry_id: atomic::Atomic<EntryId>,
+}
+
+impl AtomicEntryId {
+    pub fn get(&self) -> EntryId {
+        self.entry_id.load(atomic::Ordering::Relaxed)
+    }
+
+    pub fn update(&self, entry_id: EntryId) -> EntryId {
+        let mut current = self.get();
+        if entry_id <= current {
+            return current;
+        }
+        while entry_id > current {
+            match self.entry_id.compare_exchange(
+                current,
+                entry_id,
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => return entry_id,
+                Err(new_entry_id) => current = new_entry_id,
+            }
+        }
+        current
+    }
+}
+
+impl From<EntryId> for AtomicEntryId {
+    fn from(entry_id: EntryId) -> Self {
+        Self { entry_id: Atomic::new(entry_id) }
     }
 }
 
@@ -315,6 +361,16 @@ impl LedgerMetadata {
         &self.ensembles[self.ensembles.len() - 1]
     }
 
+    pub fn last_add_confirmed(&self) -> EntryId {
+        if self.closed() {
+            self.last_entry_id
+        } else if self.ensembles.is_empty() {
+            EntryId::INVALID
+        } else {
+            self.last_ensemble().first_entry_id - 1
+        }
+    }
+
     pub fn closed(&self) -> bool {
         self.state == LedgerState::Closed
     }
@@ -337,6 +393,148 @@ pub(crate) trait HasLedgerMetadata {
 
     fn closed(&self) -> bool {
         return self.metadata().closed();
+    }
+}
+
+pub struct BorrowedLedgerMetadata {
+    metadata: Guard<Arc<Versioned<LedgerMetadata>>>,
+    _marker: PhantomData<std::rc::Rc<()>>,
+}
+
+assert_not_impl_any!(BorrowedLedgerMetadata: Send, Sync);
+
+impl std::ops::Deref for BorrowedLedgerMetadata {
+    type Target = Versioned<LedgerMetadata>;
+
+    fn deref(&self) -> &Versioned<LedgerMetadata> {
+        &self.metadata
+    }
+}
+
+impl BorrowedLedgerMetadata {
+    pub fn into_owned(self) -> Arc<Versioned<LedgerMetadata>> {
+        Guard::into_inner(self.metadata)
+    }
+}
+
+/// ## Synchronization semantics:
+/// 1. Exposed lac synchronizes `lac` and `metadata`.
+/// 2. It is ok for thread to read delayed data.
+/// 3. In asynchronous rust, code before `.await` happens before code after `.await`.
+/// 4. All to all, read your write and read your read.
+#[derive(Clone)]
+pub struct UpdatingLedgerMetadata {
+    lac: Arc<AtomicEntryId>,
+    metadata: Arc<ArcSwap<Versioned<LedgerMetadata>>>,
+}
+
+impl UpdatingLedgerMetadata {
+    pub fn new(metadata: Versioned<LedgerMetadata>) -> Self {
+        let lac = metadata.last_add_confirmed();
+        Self { lac: Arc::new(lac.into()), metadata: Arc::new(ArcSwap::from_pointee(metadata)) }
+    }
+
+    pub fn closed_entry_id(&self) -> Option<EntryId> {
+        let metadata = self.metadata.load();
+        if metadata.closed() {
+            Some(metadata.last_entry_id)
+        } else {
+            None
+        }
+    }
+
+    pub fn check_read(&self, entry_id: EntryId) -> Result<Arc<Versioned<LedgerMetadata>>> {
+        let (lac, metadata) = self.lac_for_read();
+        if entry_id > lac {
+            return Err(BkError::new(ErrorKind::ReadExceedLastAddConfirmed));
+        }
+        Ok(metadata.into_owned())
+    }
+
+    pub fn check_unconfirmed_read(&self, entry_id: EntryId) -> Result<Arc<Versioned<LedgerMetadata>>> {
+        let metadata = self.borrow();
+        if metadata.closed() && entry_id > metadata.last_entry_id {
+            return Err(BkError::new(ErrorKind::ReadExceedLastAddConfirmed));
+        }
+        Ok(metadata.into_owned())
+    }
+
+    fn lac_for_read(&self) -> (EntryId, BorrowedLedgerMetadata) {
+        let metadata = self.borrow();
+        if metadata.closed() {
+            (metadata.last_entry_id, metadata)
+        } else {
+            (metadata.last_add_confirmed().max(self.lac.get()), metadata)
+        }
+    }
+
+    pub fn lac(&self) -> EntryId {
+        let metadata = self.borrow();
+        if metadata.closed() {
+            return metadata.last_entry_id;
+        }
+        metadata.last_add_confirmed().max(self.lac.get())
+    }
+
+    pub fn last_confirmed_meta(&self) -> Result<(EntryId, LedgerLength), Arc<Versioned<LedgerMetadata>>> {
+        let metadata = self.borrow();
+        if metadata.closed() {
+            Ok((metadata.last_entry_id, metadata.length))
+        } else {
+            Err(metadata.into_owned())
+        }
+    }
+
+    pub fn update_lac(&self, entry_id: EntryId) -> EntryId {
+        self.lac.update(entry_id)
+    }
+
+    pub fn read(&self) -> Arc<Versioned<LedgerMetadata>> {
+        self.metadata.load_full()
+    }
+
+    pub fn borrow(&self) -> BorrowedLedgerMetadata {
+        BorrowedLedgerMetadata { metadata: self.metadata.load(), _marker: PhantomData }
+    }
+
+    pub fn update(&mut self, metadata: Versioned<LedgerMetadata>) {
+        self.lac.update(metadata.last_add_confirmed());
+        let mut last_metadata = self.metadata.load();
+        if metadata.version <= last_metadata.version {
+            return;
+        }
+        let metadata = Arc::new(metadata);
+        loop {
+            let current_metadata = self.metadata.compare_and_swap(&last_metadata, metadata.clone());
+            if Arc::ptr_eq(&*current_metadata, &*last_metadata) || metadata.version <= current_metadata.version {
+                return;
+            }
+            last_metadata = current_metadata;
+        }
+    }
+}
+
+pub struct LedgerMetadataUpdater {
+    version: MetaVersion,
+    metadata: UpdatingLedgerMetadata,
+}
+
+impl LedgerMetadataUpdater {
+    pub fn new(metadata: Versioned<LedgerMetadata>) -> Self {
+        let version = metadata.version;
+        Self { version, metadata: UpdatingLedgerMetadata::new(metadata) }
+    }
+
+    pub fn subscribe(&self) -> UpdatingLedgerMetadata {
+        self.metadata.clone()
+    }
+
+    pub fn update(&mut self, metadata: Versioned<LedgerMetadata>) {
+        if self.version >= metadata.version {
+            return;
+        }
+        self.version = metadata.version;
+        self.metadata.update(metadata);
     }
 }
 

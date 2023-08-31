@@ -35,6 +35,9 @@ zookeeper-client = "0.5.0"
 const_format = "0.2.31"
 log = "0.4.20"
 static_assertions = "1.1.0"
+atomic = "0.6.0"
+arc-swap = "1.6.0"
+bytemuck = { version ="1.13.1", features =["derive"] }
 
 [dev-dependencies]
 testcontainers = { git = "https://github.com/kezhuw/testcontainers-rs.git", branch = "bookkeeper-client-ci" }
@@ -43,3 +46,7 @@ hex = "0.4.3"
 
 [build-dependencies]
 tonic-build = "0.9.2"
+
+[patch.crates-io]
+tokio = { git = "https://github.com/kezhuw/tokio.git", rev = "b7fd0291fbc6544780b0dc251ed31bbffc2c2036" }
+tokio-macros = { git = "https://github.com/kezhuw/tokio.git", rev = "b7fd0291fbc6544780b0dc251ed31bbffc2c2036" }

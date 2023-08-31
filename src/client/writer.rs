@@ -8,18 +8,18 @@ use std::time::Duration;
 
 use futures::future::{Fuse, FusedFuture, FutureExt};
 use ignore_result::Ignore;
-use static_assertions::{assert_impl_all, assert_not_impl_any};
+use static_assertions::assert_impl_all;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, Sleep};
 
 use super::bookie::{self, PoolledClient};
-use super::cell::Cell;
 use super::digest::Algorithm as DigestAlgorithm;
 use super::entry_distribution::{AckSet, EntryDistribution, HasEntryDistribution, WriteSet};
 use super::errors::{BkError, ErrorKind};
 use super::local_rc::LocalRc;
 use super::metadata::{
+    AtomicEntryId,
     BookieId,
     EntryId,
     HasLedgerMetadata,
@@ -1026,13 +1026,11 @@ impl LedgerWriter {
 #[derive(Clone)]
 pub struct LedgerAppender {
     pub(crate) reader: LedgerReader,
-    pub(crate) last_add_entry_id: Cell<EntryId>,
+    pub(crate) last_add_entry_id: Arc<AtomicEntryId>,
     pub(crate) request_sender: mpsc::Sender<WriteRequest>,
 }
 
-assert_impl_all!(LedgerAppender: Send);
-assert_not_impl_any!(LedgerAppender: Sync);
-assert_not_impl_any!(Arc<LedgerAppender>: Send);
+assert_impl_all!(LedgerAppender: Send, Sync);
 
 #[derive(Debug)]
 pub struct AddedEntry {
@@ -1075,27 +1073,27 @@ impl LedgerAppender {
         Ok(self.reader.clone())
     }
 
-    /// Gets local cached last_add_confirmed.
+    fn last_add_entry_id(&self) -> EntryId {
+        self.last_add_entry_id.get()
+    }
+
+    /// Gets local cached last_add_confirmed which could vary due to concurrent write.
     pub fn last_add_confirmed(&self) -> EntryId {
         self.reader.last_add_confirmed()
     }
 
-    fn update_last_add_entry_id(&self, entry_id: EntryId) {
-        if entry_id > self.last_add_entry_id.get() {
-            self.last_add_entry_id.set(entry_id);
-        }
+    fn update_last_add_entry_id(&self, entry_id: EntryId) -> EntryId {
+        self.last_add_entry_id.update(entry_id)
     }
 
-    fn update_last_add_confirmed(&self, last_add_confirmed: EntryId) {
-        if last_add_confirmed > self.reader.last_add_confirmed.get() {
-            self.reader.last_add_confirmed.set(last_add_confirmed);
-        }
+    fn update_last_add_confirmed(&self, last_add_confirmed: EntryId) -> EntryId {
+        self.reader.metadata.update_lac(last_add_confirmed)
     }
 
     /// Syncs writen entries on last ensemble.
     pub async fn force(&self) -> Result<()> {
-        let last_add_entry_id = self.last_add_entry_id.get();
-        if last_add_entry_id <= self.reader.last_add_confirmed.get() {
+        let last_add_entry_id = self.last_add_entry_id();
+        if last_add_entry_id <= self.last_add_confirmed() {
             return Ok(());
         }
         let (sender, receiver) = oneshot::channel();

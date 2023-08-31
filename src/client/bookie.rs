@@ -933,7 +933,7 @@ impl Client {
             let err = BkError::with_description(ErrorKind::BookieUnexpectedResponse, &"no last add confirmed");
             return Err(err);
         };
-        if response.entry_id == LAST_ADD_CONFIRMED.into() {
+        if response.entry_id == LAST_ADD_CONFIRMED.0 {
             return Ok(PolledEntry { last_add_confirmed: EntryId(max_lac), payload: None });
         }
         let Some(body) = response.body else {

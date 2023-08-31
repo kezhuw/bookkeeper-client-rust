@@ -15,6 +15,14 @@ pub struct Versioned<T> {
     pub version: MetaVersion,
 }
 
+impl<T> std::ops::Deref for Versioned<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
 impl<T> Versioned<T>
 where
     T: Clone + std::fmt::Debug,

@@ -1,24 +1,22 @@
 use std::future::Future;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::future::{ready, FusedFuture, FutureExt};
-use static_assertions::{assert_impl_all, assert_not_impl_any};
+use futures::future::{FusedFuture, FutureExt};
+use static_assertions::assert_impl_all;
 use tokio::select;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 
 use super::bookie::{self, PolledEntry, PoolledClient};
-use super::cell::{Cell, RefCell};
 use super::digest::Algorithm as DigestAlgorithm;
 use super::entry_distribution::{EntryDistribution, HasEntryDistribution};
 use super::errors::{BkError, ErrorKind};
-use super::metadata::{BookieId, EntryId, LedgerId, LedgerLength, LedgerMetadata, LedgerState};
+use super::metadata::{BookieId, EntryId, LedgerId, LedgerLength, LedgerMetadata, LedgerState, UpdatingLedgerMetadata};
 use super::placement::RandomPlacementPolicy;
 use super::writer::{LedgerWriter, WriteRequest};
 use crate::future::SelectAll;
-use crate::marker::Sendable;
 use crate::meta::{MetaStore, MetaVersion, Versioned};
+use crate::utils::DropOwner;
 
 type Result<T> = std::result::Result<T, BkError>;
 
@@ -71,47 +69,22 @@ impl LacOptions {
 }
 
 /// Ledger reader.
+#[derive(Clone)]
 pub struct LedgerReader {
     pub(crate) ledger_id: LedgerId,
-    pub(crate) metadata: RefCell<LedgerMetadata>,
-    pub(crate) metadata_version: Cell<MetaVersion>,
-    pub(crate) last_add_confirmed: Cell<EntryId>,
+    pub(crate) metadata: UpdatingLedgerMetadata,
     pub(crate) client: Arc<PoolledClient>,
     pub(crate) entry_distribution: EntryDistribution,
     pub(crate) master_key: [u8; 20],
     pub(crate) digest_algorithm: DigestAlgorithm,
-    pub(crate) updating_metadata: Cell<Option<watch::Receiver<Versioned<LedgerMetadata>>>>,
-    pub(crate) marker: PhantomData<Sendable>,
+    pub(crate) _drop_owner: Arc<DropOwner>,
 }
 
-unsafe impl Send for LedgerReader {}
-
-assert_impl_all!(LedgerReader: Send);
-assert_not_impl_any!(LedgerReader: Sync);
-assert_not_impl_any!(Arc<LedgerReader>: Send);
+assert_impl_all!(LedgerReader: Send, Sync);
 
 impl std::fmt::Debug for LedgerReader {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "LedgerReader{{ledger_id: {}}}", self.ledger_id)
-    }
-}
-
-impl Clone for LedgerReader {
-    fn clone(&self) -> LedgerReader {
-        // Cell need Copy to be Clone while watch::Receiver is not Copy.
-        let updating_metadata = unsafe { &*self.updating_metadata.as_ptr() };
-        LedgerReader {
-            ledger_id: self.ledger_id,
-            metadata: self.metadata.clone(),
-            metadata_version: self.metadata_version.clone(),
-            last_add_confirmed: self.last_add_confirmed.clone(),
-            client: self.client.clone(),
-            entry_distribution: self.entry_distribution,
-            master_key: self.master_key,
-            digest_algorithm: self.digest_algorithm.clone(),
-            updating_metadata: Cell::new(updating_metadata.clone()),
-            marker: PhantomData,
-        }
     }
 }
 
@@ -127,55 +100,17 @@ impl LedgerReader {
         self.ledger_id
     }
 
-    unsafe fn set_newer_metadata(&self, newer: Versioned<LedgerMetadata>) {
-        self.metadata_version.set(newer.version);
-        let metadata = &mut *self.metadata.as_ptr();
-        if metadata.state != LedgerState::Closed && newer.value.state == LedgerState::Closed {
-            self.last_add_confirmed.set(newer.value.last_entry_id);
-        }
-        *metadata = newer.value;
-    }
-
     pub(crate) fn update_metadata(&mut self, metadata: Versioned<LedgerMetadata>) {
-        if metadata.version > self.metadata_version.get() {
-            unsafe { self.set_newer_metadata(metadata) };
-        }
+        self.metadata.update(metadata)
     }
 
-    // SAFETY: This function depends on a not-verified assumption that select! with ready
-    // clause will not yield its execution, otherwise metadata could borrowed by new
-    // operation.
-    async fn sync_metadata(&self) {
-        if self.metadata.try_borrow_mut().is_err() {
-            // Don't change metadata when there are ongoing reads.
-            return;
-        };
-        let mut receiver = if let Some(receiver) = self.updating_metadata.take() {
-            receiver
-        } else {
-            return;
-        };
-        select! {
-            biased;
-            r = receiver.changed() => {
-                if r.is_err() {
-                    return;
-                }
-                let updated = receiver.borrow();
-                if updated.version > self.metadata_version.get() {
-                    let newer = updated.clone();
-                    drop(updated);
-                    unsafe { self.set_newer_metadata(newer) };
-                }
-            },
-            _ = ready(()) => {},
-        }
-        self.updating_metadata.set(Some(receiver));
-    }
-
-    /// Gets local cached last_add_confirmed.
+    /// Gets local cached last_add_confirmed which could vary due to concurrent read and write.
     pub fn last_add_confirmed(&self) -> EntryId {
-        self.last_add_confirmed.get()
+        self.metadata.lac()
+    }
+
+    fn update_last_add_confirmed(&self, last_add_confirmed: EntryId) -> EntryId {
+        self.metadata.update_lac(last_add_confirmed)
     }
 
     fn read_options(&self, fence: bool) -> bookie::ReadOptions<'_> {
@@ -314,25 +249,21 @@ impl LedgerReader {
         &self,
         first_entry: EntryId,
         last_entry: EntryId,
+        metadata: &LedgerMetadata,
         options: Option<&ReadOptions>,
     ) -> Result<Vec<Vec<u8>>> {
         let parallel = options.map(|o| o.parallel).unwrap_or(false);
-        let metadata = self.metadata.borrow();
-        if metadata.closed() && last_entry > self.last_add_confirmed.get() {
-            return Err(BkError::new(ErrorKind::ReadExceedLastAddConfirmed));
-        }
         let entries = if parallel {
-            self.read_entries(first_entry, last_entry, &metadata, |entry_id, bookies| {
+            self.read_entries(first_entry, last_entry, metadata, |entry_id, bookies| {
                 self.read_parallelly(entry_id, false, bookies)
             })
             .await?
         } else {
-            self.read_entries(first_entry, last_entry, &metadata, |entry_id, bookies| {
+            self.read_entries(first_entry, last_entry, metadata, |entry_id, bookies| {
                 self.read_sequentially(entry_id, false, bookies)
             })
             .await?
         };
-        drop(metadata);
         Ok(entries)
     }
 
@@ -345,12 +276,8 @@ impl LedgerReader {
     ) -> Result<Vec<Vec<u8>>> {
         assert!(first_entry <= last_entry);
         assert!(first_entry >= EntryId::MIN);
-        self.sync_metadata().await;
-        let last_add_confirmed = self.last_add_confirmed();
-        if last_entry > last_add_confirmed {
-            return Err(BkError::new(ErrorKind::ReadExceedLastAddConfirmed));
-        }
-        self.read_internally(first_entry, last_entry, options).await
+        let metadata = self.metadata.check_read(last_entry)?;
+        self.read_internally(first_entry, last_entry, &metadata, options).await
     }
 
     /// Polls entry with given id.
@@ -364,9 +291,8 @@ impl LedgerReader {
         let deadline = Instant::now() + timeout;
         let epsilon = Duration::from_millis(1);
         loop {
-            self.sync_metadata().await;
             let mut last_add_confirmed = self.last_add_confirmed();
-            let metadata = self.metadata.borrow();
+            let metadata = self.metadata.read();
             let (_, bookies, _) = metadata.ensemble_at(entry_id);
             if entry_id <= last_add_confirmed {
                 let entry = if parallel {
@@ -386,7 +312,7 @@ impl LedgerReader {
             };
             if polled_entry.last_add_confirmed > last_add_confirmed {
                 last_add_confirmed = polled_entry.last_add_confirmed;
-                self.last_add_confirmed.set(last_add_confirmed);
+                self.update_last_add_confirmed(last_add_confirmed);
             }
             if let Some(payload) = polled_entry.payload {
                 return Ok(payload);
@@ -432,11 +358,10 @@ impl LedgerReader {
     }
 
     async fn read_last_confirmed_meta(&self, fence: bool) -> Result<(EntryId, LedgerLength)> {
-        self.sync_metadata().await;
-        let metadata = self.metadata.borrow();
-        if metadata.closed() {
-            return Ok((metadata.last_entry_id, metadata.length));
-        }
+        let metadata = match self.metadata.last_confirmed_meta() {
+            Ok(last_confirmed_meta) => return Ok(last_confirmed_meta),
+            Err(metadata) => metadata,
+        };
         let ensemble = metadata.last_ensemble();
         let options = bookie::ReadOptions {
             fence_ledger: fence,
@@ -466,17 +391,17 @@ impl LedgerReader {
 
     /// Reads last_add_confirmed from latest ensemble.
     pub async fn read_last_add_confirmed(&self, options: &LacOptions) -> Result<EntryId> {
-        self.sync_metadata().await;
-        if self.closed() {
-            return Ok(self.last_add_confirmed());
+        if let Some(last_entry_id) = self.metadata.closed_entry_id() {
+            return Ok(last_entry_id);
         }
-        let metadata = self.metadata.borrow();
+        let metadata = self.metadata.read();
         let ensemble = metadata.last_ensemble();
         let mut readings = Vec::with_capacity(ensemble.bookies.len());
         for bookie_id in ensemble.bookies.iter() {
             let read = self.client.read_lac(bookie_id, self.id(), &self.digest_algorithm);
             readings.push(read.fuse());
         }
+        let last_add_confirmed = self.last_add_confirmed();
         if !options.quorum {
             let mut select_all = SelectAll::new(&mut readings);
             let mut err = None;
@@ -485,9 +410,8 @@ impl LedgerReader {
                     (_, r) = select_all.next() => {
                         match r {
                             Err(e) => err = err.or(Some(e)),
-                            Ok(entry_id) if entry_id > self.last_add_confirmed.get() => {
-                                self.last_add_confirmed.set(entry_id);
-                                return Ok(entry_id);
+                            Ok(entry_id) if entry_id > last_add_confirmed => {
+                                return Ok(self.update_last_add_confirmed(entry_id));
                             },
                             _ => {},
                         };
@@ -501,10 +425,8 @@ impl LedgerReader {
                 }
             }
         }
-        let last_add_confirmed =
-            self.cover_quorum(&mut readings, self.last_add_confirmed(), |acc, new| acc.max(new)).await?;
-        self.last_add_confirmed.set(last_add_confirmed);
-        Ok(last_add_confirmed)
+        let last_add_confirmed = self.cover_quorum(&mut readings, last_add_confirmed, |acc, new| acc.max(new)).await?;
+        Ok(self.update_last_add_confirmed(last_add_confirmed))
     }
 
     /// Reads entries without checking `last_add_confirmed` locally if ledger not considered
@@ -522,16 +444,16 @@ impl LedgerReader {
     ) -> Result<Vec<Vec<u8>>> {
         assert!(first_entry <= last_entry);
         assert!(first_entry >= EntryId::MIN);
-        self.sync_metadata().await;
-        self.read_internally(first_entry, last_entry, options).await
+        let metadata = self.metadata.check_unconfirmed_read(last_entry)?;
+        self.read_internally(first_entry, last_entry, &metadata, options).await
     }
 
     async fn recover_open_metadata(
         &self,
-        mut version: MetaVersion,
-        mut metadata: LedgerMetadata,
+        metadata: Versioned<LedgerMetadata>,
         meta_store: &Arc<dyn MetaStore>,
     ) -> Result<(MetaVersion, LedgerMetadata)> {
+        let Versioned { mut version, value: mut metadata } = metadata;
         loop {
             if metadata.state == LedgerState::Closed {
                 return Ok((version, metadata));
@@ -587,15 +509,14 @@ impl LedgerReader {
 
     pub(crate) async fn recover(
         &mut self,
-        version: MetaVersion,
         metadata_sender: mpsc::Sender<Versioned<LedgerMetadata>>,
         meta_store: &Arc<dyn MetaStore>,
         placement_policy: Arc<RandomPlacementPolicy>,
     ) -> Result<()> {
-        let metadata = self.metadata.get_mut().clone();
-        let (version, metadata) = self.recover_open_metadata(version, metadata, meta_store).await?;
+        let metadata = self.metadata.read();
+        let (version, metadata) = self.recover_open_metadata(Versioned::clone(&metadata), meta_store).await?;
         if metadata.closed() {
-            *self.metadata.get_mut() = metadata;
+            self.update_metadata(Versioned::new(version, metadata));
             return Ok(());
         }
         let (mut last_add_confirmed, ledger_length) = self.read_last_confirmed_meta(true).await?;
@@ -639,6 +560,6 @@ impl LedgerReader {
 
     /// Returns whether ledger has been closed or not.
     pub fn closed(&self) -> bool {
-        return self.metadata.borrow().closed();
+        self.metadata.borrow().closed()
     }
 }

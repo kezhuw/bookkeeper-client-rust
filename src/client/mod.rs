@@ -1,5 +1,4 @@
 mod bookie;
-mod cell;
 mod entry_distribution;
 pub(crate) mod errors;
 pub(crate) mod local_rc;
@@ -10,16 +9,13 @@ pub mod service_uri;
 mod writer;
 
 use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use ignore_result::Ignore;
 use tokio::select;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 use self::bookie::PoolledClient;
-use self::cell::{Cell, RefCell};
 use self::entry_distribution::EntryDistribution;
 pub use self::errors::{BkError, ErrorKind, Result};
 pub use self::metadata::{
@@ -32,6 +28,7 @@ pub use self::metadata::{
     LedgerMetadata,
     LedgerState,
 };
+use self::metadata::{LedgerMetadataUpdater, UpdatingLedgerMetadata};
 use self::placement::{EnsembleOptions, PlacementPolicy, RandomPlacementPolicy};
 pub use self::reader::{LacOptions, LedgerReader, PollOptions, ReadOptions};
 use self::service_uri::ServiceUri;
@@ -49,6 +46,7 @@ use super::meta::{
     ZkConfiguration,
     ZkMetaStore,
 };
+use crate::utils::{self, DropOwner, DropWatcher};
 
 /// Options to create ledger.
 #[derive(Clone, Debug)]
@@ -170,22 +168,16 @@ pub struct Bookkeeper {
 }
 
 async fn relay_metadata_stream(
-    mut version: MetaVersion,
+    mut updater: LedgerMetadataUpdater,
     mut stream: Box<dyn LedgerMetadataStream>,
-    sender: watch::Sender<Versioned<LedgerMetadata>>,
+    mut drop_watcher: DropWatcher,
 ) {
     loop {
         select! {
-            _ = sender.closed() => break,
-            r = stream.next() => {
-                match r {
+            _ = drop_watcher.dropped() => break,
+            r = stream.next() => match r {
                     Err(_) => continue,
-                    Ok(metadata) if metadata.version > version => {
-                        version = metadata.version;
-                        sender.send(metadata).ignore();
-                    },
-                    _ => {},
-                };
+                    Ok(metadata) => updater.update(metadata),
             },
         }
     }
@@ -193,35 +185,28 @@ async fn relay_metadata_stream(
 }
 
 async fn merge_metadata_stream_and_updates(
-    mut version: MetaVersion,
+    mut updater: LedgerMetadataUpdater,
     mut stream: Box<dyn LedgerMetadataStream>,
     mut updates: mpsc::Receiver<Versioned<LedgerMetadata>>,
-    sender: watch::Sender<Versioned<LedgerMetadata>>,
+    mut drop_watcher: DropWatcher,
 ) {
     loop {
         select! {
-            _ = sender.closed() => break,
-            r = stream.next() => {
-                let metadata = match r {
+            _ = drop_watcher.dropped() => break,
+            r = stream.next() => match r {
                     Err(_) => continue,
-                    Ok(metadata) if metadata.version > version => { metadata },
-                    Ok(_) => continue,
-                };
-                version = metadata.version;
-                sender.send(metadata).ignore();
+                    Ok(metadata) => updater.update(metadata),
             },
-            r = updates.recv() => {
-                let metadata = if let Some(metadata) = r {
-                    if metadata.version > version { metadata } else { continue }
-                } else {
-                    tokio::spawn(async move {
-                        relay_metadata_stream(version, stream, sender).await;
-                    });
-                    return;
-                };
-                version = metadata.version;
-                sender.send(metadata).ignore();
-            },
+            r = updates.recv() =>
+                match r {
+                    Some(metadata) => updater.update(metadata),
+                    None => {
+                        tokio::spawn(async move {
+                            relay_metadata_stream(updater, stream, drop_watcher).await;
+                        });
+                        return;
+                    }
+                } ,
         }
     }
     stream.cancel().await;
@@ -230,26 +215,24 @@ async fn merge_metadata_stream_and_updates(
 fn watch_metadata_stream(
     metadata: Versioned<LedgerMetadata>,
     stream: Box<dyn LedgerMetadataStream>,
-) -> watch::Receiver<Versioned<LedgerMetadata>> {
-    let version = metadata.version;
-    let (sender, receiver) = watch::channel(metadata);
-    tokio::spawn(async move {
-        relay_metadata_stream(version, stream, sender).await;
-    });
-    receiver
+) -> (UpdatingLedgerMetadata, DropOwner) {
+    let updater = LedgerMetadataUpdater::new(metadata);
+    let updating = updater.subscribe();
+    let (drop_owner, drop_watcher) = utils::drop_watcher();
+    tokio::spawn(async move { relay_metadata_stream(updater, stream, drop_watcher).await });
+    (updating, drop_owner)
 }
 
 fn watch_metadata_stream_and_updates(
     metadata: Versioned<LedgerMetadata>,
     stream: Box<dyn LedgerMetadataStream>,
     updates: mpsc::Receiver<Versioned<LedgerMetadata>>,
-) -> watch::Receiver<Versioned<LedgerMetadata>> {
-    let version = metadata.version;
-    let (sender, receiver) = watch::channel(metadata);
-    tokio::spawn(async move {
-        merge_metadata_stream_and_updates(version, stream, updates, sender).await;
-    });
-    receiver
+) -> (UpdatingLedgerMetadata, DropOwner) {
+    let updater = LedgerMetadataUpdater::new(metadata);
+    let updating = updater.subscribe();
+    let (drop_owner, drop_watcher) = utils::drop_watcher();
+    tokio::spawn(async move { merge_metadata_stream_and_updates(updater, stream, updates, drop_watcher).await });
+    (updating, drop_owner)
 }
 
 impl Bookkeeper {
@@ -290,8 +273,7 @@ impl Bookkeeper {
 
     /// Opens ledger for reading.
     pub async fn open_ledger(&self, ledger_id: LedgerId, options: &OpenOptions<'_>) -> Result<LedgerReader> {
-        let Versioned { version, value: metadata } = self.meta_store.read_ledger_metadata(ledger_id).await?;
-        let ensemble = metadata.last_ensemble();
+        let metadata = self.meta_store.read_ledger_metadata(ledger_id).await?;
         let entry_distribution = EntryDistribution::from_metadata(&metadata);
         if !options.administrative
             && (options.digest_type != metadata.digest_type || options.password != metadata.password)
@@ -302,32 +284,27 @@ impl Bookkeeper {
         let needs_recovery = options.recovery && !closed;
         let digest_algorithm = DigestAlgorithm::new(metadata.digest_type, &metadata.password);
         let master_key = digest::generate_master_key(&metadata.password);
-        let metadata_stream = self.meta_store.watch_ledger_metadata(ledger_id, version).await?;
-        let (metadata_watcher, metadata_sender) = if needs_recovery {
+        let metadata_stream = self.meta_store.watch_ledger_metadata(ledger_id, metadata.version).await?;
+        let (metadata, drop_owner, metadata_sender) = if needs_recovery {
             let (metadata_sender, metadata_receiver) = mpsc::channel(128);
-            let metadata = Versioned::new(version, metadata.clone());
-            let metadata_watcher = watch_metadata_stream_and_updates(metadata, metadata_stream, metadata_receiver);
-            (metadata_watcher, Some(metadata_sender))
+            let (metadata, drop_owner) =
+                watch_metadata_stream_and_updates(metadata, metadata_stream, metadata_receiver);
+            (metadata, drop_owner, Some(metadata_sender))
         } else {
-            let metadata = Versioned::new(version, metadata.clone());
-            let watcher = watch_metadata_stream(metadata, metadata_stream);
-            (watcher, None)
+            let (metadata, drop_owner) = watch_metadata_stream(metadata, metadata_stream);
+            (metadata, drop_owner, None)
         };
-        let last_add_confirmed = if closed { metadata.last_entry_id } else { ensemble.first_entry_id - 1 };
         let mut ledger = LedgerReader {
             ledger_id,
-            metadata: RefCell::new(metadata),
-            metadata_version: Cell::new(version),
+            metadata,
             client: self.bookie_client.clone(),
-            last_add_confirmed: Cell::new(last_add_confirmed),
             entry_distribution,
             master_key,
             digest_algorithm,
-            updating_metadata: Cell::new(Some(metadata_watcher)),
-            marker: PhantomData,
+            _drop_owner: drop_owner.into(),
         };
         if let Some(metadata_sender) = metadata_sender {
-            ledger.recover(version, metadata_sender, &self.meta_store, self.placement_policy.clone()).await?;
+            ledger.recover(metadata_sender, &self.meta_store, self.placement_policy.clone()).await?;
         }
         Ok(ledger)
     }
@@ -372,23 +349,20 @@ impl Bookkeeper {
             master_key,
             digest_algorithm: digest_algorithm.clone(),
         };
-        let (request_sender, metadata_watcher) =
-            self.start_ledger_writer(writer_options, version, metadata.clone()).await?;
         let entry_distribution = EntryDistribution::from_metadata(&metadata);
+        let (request_sender, metadata, drop_owner) =
+            self.start_ledger_writer(writer_options, version, metadata).await?;
         Ok(LedgerAppender {
             reader: LedgerReader {
                 ledger_id,
-                metadata: RefCell::new(metadata),
-                metadata_version: Cell::new(version),
+                metadata,
                 client: self.bookie_client.clone(),
-                last_add_confirmed: Cell::new(EntryId::INVALID),
                 entry_distribution,
                 master_key,
                 digest_algorithm,
-                updating_metadata: Cell::new(Some(metadata_watcher)),
-                marker: PhantomData,
+                _drop_owner: drop_owner.into(),
             },
-            last_add_entry_id: Cell::new(EntryId::INVALID),
+            last_add_entry_id: Arc::new(EntryId::INVALID.into()),
             request_sender,
         })
     }
@@ -398,15 +372,16 @@ impl Bookkeeper {
         options: WriterOptions,
         version: MetaVersion,
         metadata: LedgerMetadata,
-    ) -> Result<(mpsc::Sender<WriteRequest>, watch::Receiver<Versioned<LedgerMetadata>>)> {
+    ) -> Result<(mpsc::Sender<WriteRequest>, UpdatingLedgerMetadata, DropOwner)> {
         let (request_sender, request_receiver) = mpsc::channel(512);
         let metadata_stream = self.meta_store.watch_ledger_metadata(metadata.ledger_id, version).await?;
         let (metadata_sender, metadata_receiver) = mpsc::channel(128);
-        let metadata_watcher = watch_metadata_stream_and_updates(
+        let (updating_metadata, drop_owner) = watch_metadata_stream_and_updates(
             Versioned::new(version, metadata.clone()),
             metadata_stream,
             metadata_receiver,
         );
+        let metadata = updating_metadata.borrow();
         let writer = LedgerWriter {
             ledger_id: metadata.ledger_id,
             client: self.bookie_client.clone(),
@@ -417,18 +392,11 @@ impl Bookkeeper {
             meta_store: self.meta_store.clone(),
             placement_policy: self.placement_policy.clone(),
         };
+        let metadata = metadata.clone();
         tokio::spawn(async move {
-            writer
-                .write_state_loop(
-                    Versioned::new(version, metadata),
-                    EntryId::INVALID,
-                    0i64.into(),
-                    request_receiver,
-                    metadata_sender,
-                )
-                .await;
+            writer.write_state_loop(metadata, EntryId::INVALID, 0i64.into(), request_receiver, metadata_sender).await;
         });
-        Ok((request_sender, metadata_watcher))
+        Ok((request_sender, updating_metadata, drop_owner))
     }
 
     /// Deletes ledger with given id.

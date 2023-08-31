@@ -5,6 +5,7 @@ mod future;
 mod marker;
 mod meta;
 mod proto;
+mod utils;
 
 pub use client::{
     Bookkeeper,
