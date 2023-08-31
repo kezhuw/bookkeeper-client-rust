@@ -79,7 +79,7 @@ async fn create_empty_ledger(client: &bk::Bookkeeper) -> bk::LedgerId {
     ledger.id()
 }
 
-#[tokio::test(spawn = true)]
+#[tokio::test]
 async fn test_ledger_open() {
     let cluster = start_bookkeeper_cluster();
 
@@ -106,7 +106,7 @@ async fn test_ledger_open() {
     client.open_ledger(ledger_id, &open_options.administrative()).await.unwrap();
 }
 
-#[tokio::test(spawn = true)]
+#[tokio::test]
 async fn test_ledger_recover() {
     let cluster = start_bookkeeper_cluster();
 
@@ -124,7 +124,7 @@ async fn test_ledger_recover() {
     assert_eq!(bk::ErrorKind::LedgerFenced, ledger.append(Default::default()).await.unwrap_err().kind());
 }
 
-#[tokio::test(spawn = true)]
+#[tokio::test]
 async fn test_ledger_read() {
     let cluster = start_bookkeeper_cluster();
 
@@ -212,7 +212,7 @@ async fn assert_ledger_entries<T: AsRef<[u8]>>(
     }
 }
 
-#[tokio::test(spawn = true)]
+#[tokio::test]
 async fn test_ledger_delete() {
     let cluster = start_bookkeeper_cluster();
 
