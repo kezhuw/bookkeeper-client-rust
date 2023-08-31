@@ -575,16 +575,16 @@ impl ZkMetaClient {
     async fn generate_flat_ledger_id(&mut self) -> Result<LedgerId, BkError> {
         let options = zk::CreateMode::EphemeralSequential.with_acls(zk::Acls::anyone_all());
         let (_, sequence) = self.client.create("/ID-", Default::default(), &options).await?;
-        if sequence.0 < 0 {
+        if sequence.into_i64() < 0 {
             return Err(BkError::new(ErrorKind::LedgerIdOverflow));
         }
-        Ok(LedgerId(sequence.0 as i64))
+        Ok(LedgerId(sequence.into_i64()))
     }
 
     async fn generate_short_ledger_id(&self) -> Result<i64, BkError> {
         let (_, sequence) =
             self.create_path_optimistic("/idgen/ID-", Default::default(), zk::CreateMode::EphemeralSequential).await?;
-        Ok(sequence.0 as i64)
+        Ok(sequence.into_i64())
     }
 
     async fn create_ledger_hob_directory(&mut self, i: i32) -> Result<(), zk::Error> {
@@ -596,7 +596,7 @@ impl ZkMetaClient {
         write!(&mut self.scratch, "/idgen-long/{:010}/ID-", hob).ignore();
         let (_, sequence) =
             self.create_path_optimistic(&self.scratch, Default::default(), zk::CreateMode::EphemeralSequential).await?;
-        Ok(sequence.0)
+        Ok(sequence.into_i64() as i32)
     }
 
     fn extract_max_hob(children: &[String]) -> Result<i32, BkError> {
