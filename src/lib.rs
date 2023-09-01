@@ -8,7 +8,7 @@ mod proto;
 mod utils;
 
 pub use client::{
-    Bookkeeper,
+    BookKeeper,
     CloseOptions,
     Configuration,
     CreateOptions,

@@ -161,7 +161,7 @@ impl Configuration {
 
 /// BookKeeper client.
 #[derive(Clone)]
-pub struct Bookkeeper {
+pub struct BookKeeper {
     meta_store: Arc<dyn MetaStore>,
     bookie_client: Arc<PoolledClient>,
     placement_policy: Arc<RandomPlacementPolicy>,
@@ -235,9 +235,9 @@ fn watch_metadata_stream_and_updates(
     (updating, drop_owner)
 }
 
-impl Bookkeeper {
+impl BookKeeper {
     /// Constructs BookKeeper client with given configuration.
-    pub async fn new(config: Configuration) -> Result<Bookkeeper> {
+    pub async fn new(config: Configuration) -> Result<BookKeeper> {
         let service_uri = config.service_uri.parse::<ServiceUri>()?;
         let bookie_registry = match &config.bookies {
             None => None,
@@ -267,7 +267,7 @@ impl Bookkeeper {
         let placement_policy = RandomPlacementPolicy::new(bookie_registry.clone());
         let poolled_client = Arc::new(PoolledClient::new(bookie_registry));
         let bookkeeper =
-            Bookkeeper { meta_store, bookie_client: poolled_client, placement_policy: Arc::new(placement_policy) };
+            BookKeeper { meta_store, bookie_client: poolled_client, placement_policy: Arc::new(placement_policy) };
         Ok(bookkeeper)
     }
 

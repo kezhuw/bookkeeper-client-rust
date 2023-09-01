@@ -73,7 +73,7 @@ lazy_static! {
     static ref OPEN_OPTIONS: bk::OpenOptions<'static> = bk::OpenOptions::new(bk::DigestType::MAC, Some(PASSWORD));
 }
 
-async fn create_empty_ledger(client: &bk::Bookkeeper) -> bk::LedgerId {
+async fn create_empty_ledger(client: &bk::BookKeeper) -> bk::LedgerId {
     let mut ledger = client.create_ledger(CREATE_OPTIONS.clone()).await.unwrap();
     ledger.close(bk::CloseOptions::default()).await.unwrap();
     ledger.id()
@@ -84,7 +84,7 @@ async fn test_ledger_open() {
     let cluster = start_bookkeeper_cluster();
 
     let config = cluster.to_configuration();
-    let client = bk::Bookkeeper::new(config).await.unwrap();
+    let client = bk::BookKeeper::new(config).await.unwrap();
 
     let ledger_id = create_empty_ledger(&client).await;
 
@@ -111,7 +111,7 @@ async fn test_ledger_recover() {
     let cluster = start_bookkeeper_cluster();
 
     let config = cluster.to_configuration();
-    let client = bk::Bookkeeper::new(config).await.unwrap();
+    let client = bk::BookKeeper::new(config).await.unwrap();
 
     let ledger = client.create_ledger(CREATE_OPTIONS.clone()).await.unwrap();
     let ledger_id = ledger.id();
@@ -129,7 +129,7 @@ async fn test_ledger_read() {
     let cluster = start_bookkeeper_cluster();
 
     let config = cluster.to_configuration();
-    let client = bk::Bookkeeper::new(config).await.unwrap();
+    let client = bk::BookKeeper::new(config).await.unwrap();
 
     let mut ledger = client.create_ledger(CREATE_OPTIONS.clone()).await.unwrap();
     let ledger_id = ledger.id();
@@ -187,7 +187,7 @@ async fn test_ledger_read() {
 }
 
 async fn assert_ledger_entries<T: AsRef<[u8]>>(
-    client: &bk::Bookkeeper,
+    client: &bk::BookKeeper,
     ledger_id: bk::LedgerId,
     entries: Vec<T>,
     confirmed: bool,
@@ -217,7 +217,7 @@ async fn test_ledger_delete() {
     let cluster = start_bookkeeper_cluster();
 
     let config = cluster.to_configuration();
-    let client = bk::Bookkeeper::new(config).await.unwrap();
+    let client = bk::BookKeeper::new(config).await.unwrap();
 
     let ledger_id = create_empty_ledger(&client).await;
 
