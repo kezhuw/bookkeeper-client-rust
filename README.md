@@ -6,9 +6,6 @@
 
 Apache BookKeeper client writes in async rust
 
-## Disclaimer
-**This project is far from production usage.**
-
 ## Examples
 See [tests](tests/client.rs).
 
