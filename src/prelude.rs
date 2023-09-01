@@ -1,14 +1,5 @@
-mod client;
-mod digest;
-mod error;
-mod future;
-mod marker;
-mod meta;
-pub mod prelude;
-mod proto;
-mod utils;
-
-pub use client::{
+//! Export types with less chance to conflict with other crates in case of no renaming.
+pub use crate::{
     BookKeeper,
     CloseOptions,
     Configuration,
@@ -16,7 +7,8 @@ pub use client::{
     DeleteOptions,
     DigestType,
     EntryId,
-    ErrorKind,
+    Error as BkError,
+    ErrorKind as BkErrorKind,
     LacOptions,
     LedgerAppender,
     LedgerId,
@@ -25,4 +17,3 @@ pub use client::{
     PollOptions,
     ReadOptions,
 };
-pub use error::Error;
