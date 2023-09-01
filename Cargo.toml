@@ -1,6 +1,6 @@
 [package]
 name = "bookkeeper-client"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Kezhu Wang <kezhuw@gmail.com>"]
 homepage = "https://github.com/kezhuw/bookkeeper-client-rust"
