@@ -33,7 +33,7 @@ compact_str = "0.7.1"
 etcd-client = "0.11.1"
 async-recursion = "1.0.4"
 strum = { version = "0.25", features = ["derive"] }
-zookeeper-client = "0.6.0"
+zookeeper-client = "0.6.1"
 const_format = "0.2.31"
 log = "0.4.20"
 static_assertions = "1.1.0"
@@ -45,6 +45,8 @@ bytemuck = { version ="1.13.1", features =["derive"] }
 testcontainers = { git = "https://github.com/kezhuw/testcontainers-rs.git", branch = "bookkeeper-client-ci" }
 pretty_assertions = "1.4.0"
 hex = "0.4.3"
+test-log = "0.2.12"
+env_logger = "0.10.0"
 
 [build-dependencies]
 tonic-build = "0.9.2"

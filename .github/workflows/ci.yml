@@ -5,7 +5,7 @@ on:
 
 env:
   RUSTFLAGS: -Dwarnings
-  RUST_BACKTRACE: 1
+  RUST_BACKTRACE: full
 
 jobs:
   fmt:
@@ -39,6 +39,8 @@ jobs:
   test:
     needs: [build]
     runs-on: ubuntu-latest
+    env:
+      RUST_LOG: debug
     steps:
     - run: sudo apt install -y protobuf-compiler
     - uses: actions/checkout@v2
