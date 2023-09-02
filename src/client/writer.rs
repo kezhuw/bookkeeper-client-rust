@@ -147,6 +147,38 @@ pub(crate) struct LedgerWriter {
     pub deferred_sync: bool,
 }
 
+enum Termination {
+    None,
+    Terminating,
+    Terminated,
+    Error(BkError),
+}
+
+impl Termination {
+    fn next(&mut self) {
+        if matches!(self, Termination::Terminating) {
+            *self = Termination::Terminated;
+        }
+    }
+
+    fn next_with_err(&mut self, err: BkError) {
+        if matches!(self, Termination::Terminating) {
+            *self = Termination::Error(err);
+        }
+    }
+
+    fn terminated(&self) -> bool {
+        matches!(self, Termination::Terminated | Termination::Error(_))
+    }
+
+    fn err(&self) -> Option<&BkError> {
+        match self {
+            Termination::Error(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
 struct WriterState<
     'a,
     AddFuture,
@@ -176,6 +208,7 @@ struct WriterState<
 
     fatal: Option<BkError>,
     closing: bool,
+    termination: Termination,
     close_future: Fuse<CloseFuture>,
     close_waiters: Vec<oneshot::Sender<Result<Versioned<LedgerMetadata>>>>,
     ledger_closer: LedgerCloser,
@@ -333,6 +366,16 @@ where
         self.state == LedgerState::Closed
     }
 
+    fn terminate(&mut self) {
+        self.termination = Termination::Terminating;
+        let (sender, _) = oneshot::channel();
+        self.close_ledger(sender);
+    }
+
+    fn terminated(&self) -> bool {
+        self.closed() || self.termination.terminated()
+    }
+
     fn close_ledger(&mut self, responser: oneshot::Sender<Result<Versioned<LedgerMetadata>>>) {
         if self.closed() {
             let metadata = self.metadata.as_ref().clone();
@@ -370,11 +413,11 @@ where
     }
 
     fn drain_ledger_close(&mut self, err: BkError) {
-        let err = Err(err);
         self.closing = false;
         self.close_waiters.drain(..).for_each(|responser| {
-            responser.send(err.clone()).ignore();
+            responser.send(Err(err.clone())).ignore();
         });
+        self.termination.next_with_err(err);
     }
 
     fn fail_ledger_close(&mut self, err: BkError) {
@@ -384,6 +427,7 @@ where
     fn complete_ledger_close(&mut self, metadata: Versioned<LedgerMetadata>) {
         self.state = LedgerState::Closed;
         self.closing = false;
+        self.termination.next();
         self.metadata = LocalRc::new(metadata.clone());
         self.close_waiters.drain(..).for_each(|responser| {
             responser.send(Ok(metadata.clone())).ignore();
@@ -710,6 +754,7 @@ impl LedgerWriter {
 
             fatal: None,
             closing: false,
+            termination: Termination::None,
             close_future: Fuse::terminated(),
             close_waiters: Vec::with_capacity(5),
             ledger_closer: |metadata, last_add_confirmed, ledger_length, recovery, ensembles| {
@@ -754,11 +799,12 @@ impl LedgerWriter {
 
         let mut channel_closed = false;
         let mut metadata_sending = Fuse::terminated();
-        while !(channel_closed && state.closed()) {
+        while !state.terminated() {
             select! {
                 request = request_receiver.recv(), if !channel_closed => {
                     let Some(request) = request else {
                         channel_closed = true;
+                        state.terminate();
                         continue;
                     };
                     match request {
@@ -779,6 +825,25 @@ impl LedgerWriter {
                     }
                 },
                 _ = unsafe {Pin::new_unchecked(&mut metadata_sending)} => {},
+            }
+        }
+        if let Some(err) = state.termination.err() {
+            log::warn!("ledger {} all writers dropped, but ledger close failed: {:?}", self.ledger_id, err);
+            return;
+        }
+        request_receiver.close();
+        while let Some(request) = request_receiver.recv().await {
+            // We are processing request, so ledger was closed successfully.
+            match request {
+                WriteRequest::Append { responser, .. } => {
+                    responser.send(Err(BkError::new(ErrorKind::LedgerClosed))).ignore()
+                },
+                WriteRequest::Force { responser, .. } => {
+                    responser.send(Err(BkError::new(ErrorKind::LedgerClosed))).ignore()
+                },
+                WriteRequest::Close { responser } => {
+                    responser.send(Err(BkError::new(ErrorKind::LedgerClosed))).ignore()
+                },
             }
         }
     }

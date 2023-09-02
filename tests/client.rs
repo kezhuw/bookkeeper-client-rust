@@ -225,3 +225,20 @@ async fn test_ledger_delete() {
         client.delete_ledger(ledger_id, Default::default()).await.unwrap_err().kind()
     );
 }
+
+#[test_log::test(tokio::test)]
+async fn test_ledger_drop() {
+    let cluster = start_bookkeeper_cluster();
+
+    let config = cluster.configuration();
+    let client = BookKeeper::new(config).await.unwrap();
+
+    let ledger = client.create_ledger(CREATE_OPTIONS.clone()).await.unwrap();
+    let ledger_id = ledger.id();
+    drop(ledger);
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    let reader = client.open_ledger(ledger_id, &OPEN_OPTIONS).await.unwrap();
+    assert_eq!(reader.closed(), true);
+}
