@@ -739,7 +739,7 @@ impl LedgerWriter {
         metadata: Versioned<LedgerMetadata>,
         last_confirmed_entry_id: EntryId,
         last_confirmed_ledger_length: LedgerLength,
-        mut request_receiver: mpsc::Receiver<WriteRequest>,
+        mut request_receiver: mpsc::UnboundedReceiver<WriteRequest>,
         metadata_sender: mpsc::Sender<Versioned<LedgerMetadata>>,
     ) {
         let ensemble_size = metadata.value.ensemble_size as usize;
@@ -1092,7 +1092,7 @@ impl LedgerWriter {
 pub struct LedgerAppender {
     pub(crate) reader: LedgerReader,
     pub(crate) last_add_entry_id: Arc<AtomicEntryId>,
-    pub(crate) request_sender: mpsc::Sender<WriteRequest>,
+    pub(crate) request_sender: mpsc::UnboundedSender<WriteRequest>,
 }
 
 assert_impl_all!(LedgerAppender: Send, Sync);
@@ -1125,7 +1125,7 @@ impl LedgerAppender {
     pub async fn close(&mut self, _options: CloseOptions) -> Result<()> {
         let (sender, receiver) = oneshot::channel();
         let request = WriteRequest::Close { responser: sender };
-        if self.request_sender.send(request).await.is_err() {
+        if self.request_sender.send(request).is_err() {
             return Err(BkError::new(ErrorKind::LedgerClosed));
         }
         let metadata = receiver.await.unwrap()?;
@@ -1163,7 +1163,7 @@ impl LedgerAppender {
         }
         let (sender, receiver) = oneshot::channel();
         let request = WriteRequest::Force { entry_id: last_add_entry_id, responser: sender };
-        if self.request_sender.send(request).await.is_err() {
+        if self.request_sender.send(request).is_err() {
             return Err(BkError::new(ErrorKind::LedgerClosed));
         }
         let last_add_confirmed = receiver.await.unwrap()?;
@@ -1171,16 +1171,31 @@ impl LedgerAppender {
         Ok(())
     }
 
+    async fn wait<T, E, F>(result: std::result::Result<F, E>) -> std::result::Result<T, E>
+    where
+        F: Future<Output = std::result::Result<T, E>>, {
+        match result {
+            Err(err) => Err(err),
+            Ok(future) => future.await,
+        }
+    }
+
     /// Appends data to ledger.
-    pub async fn append(&self, data: &[u8]) -> Result<EntryId> {
+    pub fn append<'a>(&'a self, data: &'_ [u8]) -> impl Future<Output = Result<EntryId>> + Send + 'a {
+        Self::wait(self.append_internally(data))
+    }
+
+    fn append_internally<'a>(&'a self, data: &[u8]) -> Result<impl Future<Output = Result<EntryId>> + Send + 'a> {
         let (sender, receiver) = oneshot::channel();
         let request = WriteRequest::Append { entry_id: EntryId::INVALID, payload: data.to_vec(), responser: sender };
-        if self.request_sender.send(request).await.is_err() {
+        if self.request_sender.send(request).is_err() {
             return Err(BkError::new(ErrorKind::LedgerClosed));
         }
-        let AddedEntry { entry_id, last_add_confirmed } = receiver.await.unwrap()?;
-        self.update_last_add_entry_id(entry_id);
-        self.update_last_add_confirmed(last_add_confirmed);
-        Ok(entry_id)
+        Ok(async move {
+            let AddedEntry { entry_id, last_add_confirmed } = receiver.await.unwrap()?;
+            self.update_last_add_entry_id(entry_id);
+            self.update_last_add_confirmed(last_add_confirmed);
+            Ok(entry_id)
+        })
     }
 }

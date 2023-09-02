@@ -372,8 +372,8 @@ impl BookKeeper {
         options: WriterOptions,
         version: MetaVersion,
         metadata: LedgerMetadata,
-    ) -> Result<(mpsc::Sender<WriteRequest>, UpdatingLedgerMetadata, DropOwner)> {
-        let (request_sender, request_receiver) = mpsc::channel(512);
+    ) -> Result<(mpsc::UnboundedSender<WriteRequest>, UpdatingLedgerMetadata, DropOwner)> {
+        let (request_sender, request_receiver) = mpsc::unbounded_channel();
         let metadata_stream = self.meta_store.watch_ledger_metadata(metadata.ledger_id, version).await?;
         let (metadata_sender, metadata_receiver) = mpsc::channel(128);
         let (updating_metadata, drop_owner) = watch_metadata_stream_and_updates(
