@@ -481,8 +481,8 @@ impl LedgerReader {
         placement_policy: Arc<RandomPlacementPolicy>,
         last_confirmed_entry_id: EntryId,
         last_confirmed_ledger_length: LedgerLength,
-    ) -> mpsc::Sender<WriteRequest> {
-        let (request_sender, request_receiver) = mpsc::channel(50);
+    ) -> mpsc::UnboundedSender<WriteRequest> {
+        let (request_sender, request_receiver) = mpsc::unbounded_channel();
         let writer = LedgerWriter {
             ledger_id: metadata.value.ledger_id,
             client: self.client.clone(),
@@ -542,7 +542,7 @@ impl LedgerReader {
                 Ok(fetched_entry) => fetched_entry.payload,
             };
             let (sender, receiver) = oneshot::channel();
-            if request_sender.send(WriteRequest::Append { entry_id, payload, responser: sender }).await.is_err() {
+            if request_sender.send(WriteRequest::Append { entry_id, payload, responser: sender }).is_err() {
                 let err = BkError::with_description(ErrorKind::UnexpectedError, &"writer closed during recovery");
                 return Err(err);
             }
@@ -552,7 +552,7 @@ impl LedgerReader {
             last_add_confirmed = entry_id;
         }
         let (close_sender, close_receiver) = oneshot::channel();
-        request_sender.send(WriteRequest::Close { responser: close_sender }).await.unwrap();
+        request_sender.send(WriteRequest::Close { responser: close_sender }).unwrap();
         let metadata = close_receiver.await.unwrap()?;
         self.update_metadata(metadata);
         Ok(())

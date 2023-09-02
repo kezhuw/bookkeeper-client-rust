@@ -207,6 +207,28 @@ async fn assert_ledger_entries<T: AsRef<[u8]>>(
 }
 
 #[test_log::test(tokio::test)]
+async fn test_ledger_append_semi_asynchronous() {
+    let cluster = start_bookkeeper_cluster();
+
+    let config = cluster.configuration();
+    let client = BookKeeper::new(config).await.unwrap();
+
+    let ledger = client.create_ledger(CREATE_OPTIONS.clone()).await.unwrap();
+
+    // given: create two append futures in order
+    let append0 = ledger.append(ENTRY0);
+    let append1 = ledger.append(ENTRY1);
+
+    // when: evaluate two futures in reversed order
+    let entry1 = append1.await.unwrap();
+    let entry0 = append0.await.unwrap();
+
+    // then: get entry id in future creation order
+    assert_eq!(entry0, ENTRY_ID0);
+    assert_eq!(entry1, ENTRY_ID1);
+}
+
+#[test_log::test(tokio::test)]
 async fn test_ledger_delete() {
     let cluster = start_bookkeeper_cluster();
 
