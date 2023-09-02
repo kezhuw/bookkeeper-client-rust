@@ -60,7 +60,6 @@ pub struct CreateOptions {
     custom_metadata: HashMap<String, Vec<u8>>,
     digest_type: DigestType,
 
-    // XXX write option ?
     deferred_sync: bool,
 }
 
@@ -102,6 +101,7 @@ impl CreateOptions {
         CreateOptions { custom_metadata: metadata, ..self }
     }
 
+    /// Don't wait for `fsync` after entry written. Use it with caution. See [LedgerAppender::force].
     pub fn deferred_sync(self) -> Self {
         CreateOptions { deferred_sync: true, ..self }
     }

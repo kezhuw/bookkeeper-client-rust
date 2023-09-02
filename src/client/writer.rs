@@ -1156,6 +1156,9 @@ impl LedgerAppender {
     }
 
     /// Syncs writen entries on last ensemble.
+    ///
+    /// ## Errors
+    /// It is indeterministic whether previously written entries are persisted or not if [ErrorKind::LedgerForceFailed] occurs.
     pub async fn force(&self) -> Result<()> {
         let last_add_entry_id = self.last_add_entry_id();
         if last_add_entry_id <= self.last_add_confirmed() {
